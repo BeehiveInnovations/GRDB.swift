@@ -334,65 +334,14 @@ class DatabaseObservationBroker {
             SchedulingWatchdog.current!.databaseObservationBroker = self
             
             // Fill statementObservations with observations that are interested
-            // in the kind of database events performed by the statement, as
-            // reported by `sqlite3_set_authorizer`.
-            //
+            // in the kind of database events performed by the statement.
             // Those statementObservations will be notified of individual changes
             // in databaseWillChange() and databaseDidChange().
-            let authorizerEventKinds = statement.authorizerEventKinds
-            
-            switch authorizerEventKinds.count {
-            case 0:
-                // Statement has no effect on any database table.
-                //
-                // For example: PRAGMA foreign_keys = ON
-                statementObservations = []
-            case 1:
-                // We'll execute a simple statement without any side effect.
-                // Eventual database events will thus all have the same kind. All
-                // detabase events can be notified to interested observations.
-                //
-                // For example, if one observes all deletions in the table T, then
-                // all individual deletions of DELETE FROM T are notified:
-                let eventKind = authorizerEventKinds[0]
-                statementObservations = transactionObservations.compactMap { observation in
-                    guard observation.observes(eventsOfKind: eventKind) else {
-                        // observation is not interested
-                        return nil
-                    }
-                    
-                    // Observation will be notified of all individual events
-                    return StatementObservation(
-                        transactionObservation: observation,
-                        trackingEvents: .all)
-                }
-            default:
-                // We'll execute a complex statement with side effects performed by
-                // an SQL trigger or a foreign key action. Eventual database events
-                // may not all have the same kind: we need to filter them before
-                // notifying interested observations.
-                //
-                // For example, if DELETE FROM T1 generates deletions in T1 and T2
-                // by the mean of a foreign key action, then when one only observes
-                // deletions in T1, one must not be notified of deletions in T2:
-                statementObservations = transactionObservations.compactMap { observation in
-                    let observedEventKinds = authorizerEventKinds.filter(observation.observes)
-                    if observedEventKinds.isEmpty {
-                        // observation is not interested
-                        return nil
-                    }
-                    
-                    // Observation will only be notified of individual events
-                    // it is interested into.
-                    return StatementObservation(
-                        transactionObservation: observation,
-                        trackingEvents: .matching(
-                            observedEventKinds: observedEventKinds,
-                            authorizerEventKinds: authorizerEventKinds))
-                }
+            statementObservations = transactionObservations.compactMap { observation in
+                observation.observations(for: statement)
             }
         }
-        
+
         transactionCompletion = .none
     }
     
@@ -805,8 +754,8 @@ public protocol TransactionObserver: AnyObject {
     /// Returns whether specific kinds of database changes should be notified
     /// to the observer.
     ///
-    /// When this method returns false, database events of this kind are not
-    /// notified to the ``databaseDidChange(with:)`` method.
+    /// When this method and ``observes(statement:)`` return false, database
+    /// events are not notified to the ``databaseDidChange(with:)`` method.
     ///
     /// For example:
     ///
@@ -824,6 +773,14 @@ public protocol TransactionObserver: AnyObject {
     /// [truncate optimization](https://www.sqlite.org/lang_delete.html#the_truncate_optimization)
     /// from being applied on the observed tables.
     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool
+    
+    /// Returns whether statements made by the statement should be notified to the observer.
+    ///
+    /// This method can be used to observe indirect writes from statements (e.g. a statement invoking
+    /// a custom SQL function which internally runs its own statements). ``observes(eventsOfKind:)``
+    /// would not be called for such statements because potential writes can't be inferred from the syntax of
+    /// these statements.
+    func observes(statement: Statement) -> Bool
     
     /// Called when the database was modified in some unspecified way.
     ///
@@ -902,6 +859,11 @@ public protocol TransactionObserver: AnyObject {
 }
 
 extension TransactionObserver {
+    /// The default implementation does not observe statements.
+    public func observes(statement: Statement) -> Bool {
+        return false
+    }
+
     /// The default implementation does nothing.
     public func databaseWillCommit() throws { }
     
@@ -997,6 +959,65 @@ final class TransactionObservation {
     
     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
         observer?.observes(eventsOfKind: eventKind) ?? false
+    }
+    
+    func observations(for statement: Statement) -> StatementObservation? {
+        guard let observer else {
+            return nil
+        }
+        
+        if observer.observes(statement: statement) {
+            return StatementObservation(
+                transactionObservation: self,
+                trackingEvents: .all)
+        }
+        
+        let authorizerEventKinds = statement.authorizerEventKinds
+        
+        switch authorizerEventKinds.count {
+        case 0:
+            // Statement has no effect on any database table.
+            //
+            // For example: PRAGMA foreign_keys = ON
+            return nil
+        case 1:
+            // We'll execute a simple statement without any side effect.
+            // Eventual database events will thus all have the same kind. All
+            // detabase events can be notified to interested observations.
+            //
+            // For example, if one observes all deletions in the table T, then
+            // all individual deletions of DELETE FROM T are notified:
+            guard observer.observes(eventsOfKind: authorizerEventKinds[0]) else {
+                // observation is not interested
+                return nil
+            }
+            
+            // Observation will be notified of all individual events
+            return StatementObservation(
+                transactionObservation: self,
+                trackingEvents: .all)
+        default:
+            // We'll execute a complex statement with side effects performed by
+            // an SQL trigger or a foreign key action. Eventual database events
+            // may not all have the same kind: we need to filter them before
+            // notifying interested observations.
+            //
+            // For example, if DELETE FROM T1 generates deletions in T1 and T2
+            // by the mean of a foreign key action, then when one only observes
+            // deletions in T1, one must not be notified of deletions in T2:
+            let observedEventKinds = authorizerEventKinds.filter(observer.observes)
+            if observedEventKinds.isEmpty {
+                // observation is not interested
+                return nil
+            }
+            // Observation will only be notified of individual events
+            // it is interested into.
+            return StatementObservation(
+                transactionObservation: self,
+                trackingEvents: .matching(
+                    observedEventKinds: observedEventKinds,
+                    authorizerEventKinds: authorizerEventKinds))
+        }
     }
     
     #if SQLITE_ENABLE_PREUPDATE_HOOK
