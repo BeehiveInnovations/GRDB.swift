@@ -9,12 +9,12 @@ private class EverythingObserver: TransactionObserver {
         changedTables.insert(event.tableName)
     }
 
-    func observes(eventsOfKind eventKind: GRDB.DatabaseEventKind) -> Bool {
-        return true
+    var observesAllDatabaseChanges: Bool {
+        true
     }
     
-    func observes(statement: Statement) -> Bool {
-        return true
+    func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
+        fatalError("Should not be called since observesAllDatbaaseChanges is true")
     }
 
     func databaseDidCommit(_ db: GRDB.Database) {}
@@ -26,7 +26,7 @@ private struct SendablePtr: @unchecked Sendable {
     let ptr: OpaquePointer
 }
 
-class TransactionObserverObserveStatementTests: GRDBTestCase {
+class TransactionObserverObserveEverythingTests: GRDBTestCase {
     func testIndirectWrite() throws {
         var config = Configuration()
         config.prepareDatabase{ database in
@@ -53,6 +53,22 @@ class TransactionObserverObserveStatementTests: GRDBTestCase {
         db.add(transactionObserver: observer)
         try db.writeWithoutTransaction { db in
             try db.execute(sql: "SELECT custom_clear_function()")
+        }
+        
+        XCTAssert(observer.changedTables == ["foo"])
+    }
+
+    func testDisablesTruncateOptimization() throws {
+        let db = try makeDatabaseQueue()
+        try db.writeWithoutTransaction { db in
+            try db.execute(sql: "CREATE TABLE foo (bar TEXT)")
+            try db.execute(sql: "INSERT INTO foo DEFAULT VALUES")
+        }
+        
+        let observer = EverythingObserver()
+        db.add(transactionObserver: observer)
+        try db.writeWithoutTransaction { db in
+            try db.execute(sql: "DELETE FROM foo")
         }
         
         XCTAssert(observer.changedTables == ["foo"])

@@ -774,13 +774,14 @@ public protocol TransactionObserver: AnyObject {
     /// from being applied on the observed tables.
     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool
     
-    /// Returns whether statements made by the statement should be notified to the observer.
+    /// Returns whether this observer should unconditionally be notified for all database changes, regardless of
+    /// ``observes(eventsOfKind:)``.
     ///
     /// This method can be used to observe indirect writes from statements (e.g. a statement invoking
     /// a custom SQL function which internally runs its own statements). ``observes(eventsOfKind:)``
     /// would not be called for such statements because potential writes can't be inferred from the syntax of
     /// these statements.
-    func observes(statement: Statement) -> Bool
+    var observesAllDatabaseChanges: Bool { get }
     
     /// Called when the database was modified in some unspecified way.
     ///
@@ -860,8 +861,8 @@ public protocol TransactionObserver: AnyObject {
 
 extension TransactionObserver {
     /// The default implementation does not observe statements.
-    public func observes(statement: Statement) -> Bool {
-        return false
+    public var observesAllDatabaseChanges: Bool {
+        false
     }
 
     /// The default implementation does nothing.
@@ -958,7 +959,11 @@ final class TransactionObservation {
     }
     
     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
-        observer?.observes(eventsOfKind: eventKind) ?? false
+        guard let observer else {
+            return false
+        }
+        return observer.observesAllDatabaseChanges || observer
+            .observes(eventsOfKind: eventKind)
     }
     
     func observations(for statement: Statement) -> StatementObservation? {
@@ -966,7 +971,7 @@ final class TransactionObservation {
             return nil
         }
         
-        if observer.observes(statement: statement) {
+        if observer.observesAllDatabaseChanges {
             return StatementObservation(
                 transactionObservation: self,
                 trackingEvents: .all)

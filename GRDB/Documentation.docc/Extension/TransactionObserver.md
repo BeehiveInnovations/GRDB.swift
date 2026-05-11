@@ -125,6 +125,9 @@ class PlayerObserver: TransactionObserver {
 
 When the `observes(eventsOfKind:)` method returns false for all event kinds, the observer is still notified of transactions.
 
+In addition to ``observes(eventsOfKind:)``, transaction observers can implement the `observesAllDatabaseChanges` getter. When set to `true`, the observer will
+observe all changes to the database.
+
 ## Observation Extent
 
 **You can specify how long an observer is notified of database changes and transactions.**
@@ -232,7 +235,7 @@ The changes and transactions that are not automatically notified to transaction 
 
 - Read-only transactions.
 - Changes and transactions performed by external database connections.
-- Changes performed by SQLite statements that are not both compiled and executed through GRDB APIs.
+- Changes performed by SQLite statements that are not both compiled and executed through GRDB APIs, including statements ran from a custom SQL function that is itself invoked with GRDB APIs.
 - Changes to the database schema, changes to internal system tables such as `sqlite_master`.
 - Changes to [`WITHOUT ROWID`](https://www.sqlite.org/withoutrowid.html) tables.
 - The deletion of duplicate rows triggered by [`ON CONFLICT REPLACE`](https://www.sqlite.org/lang_conflict.html) clauses (this last exception might change in a future release of SQLite).
