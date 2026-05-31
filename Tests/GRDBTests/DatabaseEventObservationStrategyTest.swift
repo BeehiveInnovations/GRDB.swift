@@ -5,16 +5,18 @@ import SQLite3
 private class EverythingObserver: TransactionObserver {
     var changedTables = Set<String>()
     
+    var databaseEventObservationStrategy: DatabaseEventObservationStrategy {
+        var strategy = DatabaseEventObservationStrategy.default
+        strategy.requiresDatabaseEventKind = false
+        return strategy
+    }
+
     func databaseDidChange(with event: GRDB.DatabaseEvent) {
         changedTables.insert(event.tableName)
     }
 
-    var observesAllDatabaseChanges: Bool {
-        true
-    }
-    
     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
-        fatalError("Should not be called since observesAllDatbaaseChanges is true")
+        fatalError("Should not be called since requiresDatabaseEventKind is false")
     }
 
     func databaseDidCommit(_ db: GRDB.Database) {}
@@ -26,7 +28,7 @@ private struct SendablePtr: @unchecked Sendable {
     let ptr: OpaquePointer
 }
 
-class TransactionObserverObserveEverythingTests: GRDBTestCase {
+class DatabaseEventObservationStrategyTest: GRDBTestCase {
     func testIndirectWrite() throws {
         var config = Configuration()
         config.prepareDatabase{ database in

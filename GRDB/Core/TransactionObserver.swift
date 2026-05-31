@@ -297,6 +297,10 @@ class DatabaseObservationBroker {
         }
     }
     
+    /// Notifies that some changes were performed in the provided
+    /// database region.
+    ///
+    /// Support for the public ``Database/notifyChanges(in:)`` method.
     func notifyChanges(withEventsOfKind eventKinds: [DatabaseEventKind]) throws {
         // Support for stopObservingDatabaseChangesUntilNextTransaction()
         SchedulingWatchdog.current!.databaseObservationBroker = self
@@ -338,7 +342,7 @@ class DatabaseObservationBroker {
             // Those statementObservations will be notified of individual changes
             // in databaseWillChange() and databaseDidChange().
             statementObservations = transactionObservations.compactMap { observation in
-                observation.observations(for: statement)
+                observation.statementObservation(for: statement)
             }
         }
 
@@ -747,15 +751,77 @@ class DatabaseObservationBroker {
     }
 }
 
+// MARK: - DatabaseEventObservationStrategy
+
+/// Controls which database changes are notified to a `TransactionObserver`.
+public struct DatabaseEventObservationStrategy: Sendable {
+    /// A boolean value indicating whether a ``TransactionObserver`` focuses
+    /// on database changes filtered by its
+    /// ``TransactionObserver/observes(eventsOfKind:)`` method.
+    ///
+    /// When this flag is true (the default), the only notified changes are
+    /// those performed by `DELETE`, `INSERT` and `UPDATE` statements that
+    /// are compiled and executed by GRDB. Other changes are not: changes
+    /// performed by `SELECT` statements (through a database function),
+    /// changes performed by statements compiled or executed with the SQLite
+    /// C API.
+    ///
+    /// Set this flag to false in order to be notified of all database events.
+    ///
+    /// When this flag is false, an observer prevents the
+    /// [truncate optimization](https://www.sqlite.org/lang_delete.html#the_truncate_optimization)
+    /// from being applied on all database tables.
+    public var requiresDatabaseEventKind: Bool
+    
+    /// The default strategy for observing database change events.
+    ///
+    /// In this default strategy, only the `DELETE`, `INSERT` and `UPDATE`
+    /// statements that are compiled and executed by GRDB are observed.
+    public static let `default` = DatabaseEventObservationStrategy(requiresDatabaseEventKind: true)
+}
+
 // MARK: - TransactionObserver
 
 public protocol TransactionObserver: AnyObject {
     
+    /// Controls which database changes should be notified to the observer.
+    ///
+    /// The default value is ``DatabaseEventObservationStrategy/default``,
+    /// which only detects changes performed by `DELETE`, `INSERT` and
+    /// `UPDATE` statements that are compiled and executed by GRDB.
+    ///
+    /// You can define a universal observer that observes changes performed
+    /// by `SELECT` statements (through a database function), changes
+    /// performed by statements compiled or executed with the SQLite C API,
+    /// as below:
+    ///
+    /// ```swift
+    /// // An observer that observes all database changes.
+    /// class UniversalObserver: TransactionObserver {
+    ///     var databaseEventObservationStrategy: DatabaseEventObservationStrategy {
+    ///         var strategy = DatabaseEventObservationStrategy.default
+    ///         // Don't filter on database event kind, so that we are
+    ///         // notified of changes performed through the SQLite C API:
+    ///         strategy.requiresDatabaseEventKind = false
+    ///         return strategy
+    ///     }
+    ///
+    ///     // You still have to provide an implementation for this method,
+    ///     // but it will never be called since `requiresDatabaseEventKind`
+    ///     // is false.
+    ///     func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
+    ///         false // ignored
+    ///     }
+    ///
+    ///     func databaseDidChange(with event: DatabaseEvent) {
+    ///         // Handle the change
+    ///     }
+    /// }
+    /// ```
+    var databaseEventObservationStrategy: DatabaseEventObservationStrategy { get }
+    
     /// Returns whether specific kinds of database changes should be notified
     /// to the observer.
-    ///
-    /// When this method and ``observes(statement:)`` return false, database
-    /// events are not notified to the ``databaseDidChange(with:)`` method.
     ///
     /// For example:
     ///
@@ -772,16 +838,12 @@ public protocol TransactionObserver: AnyObject {
     /// prevents the
     /// [truncate optimization](https://www.sqlite.org/lang_delete.html#the_truncate_optimization)
     /// from being applied on the observed tables.
-    func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool
-    
-    /// Returns whether this observer should unconditionally be notified for all database changes, regardless of
-    /// ``observes(eventsOfKind:)``.
     ///
-    /// This method can be used to observe indirect writes from statements (e.g. a statement invoking
-    /// a custom SQL function which internally runs its own statements). ``observes(eventsOfKind:)``
-    /// would not be called for such statements because potential writes can't be inferred from the syntax of
-    /// these statements.
-    var observesAllDatabaseChanges: Bool { get }
+    /// - Note: This method is not called when the result of
+    /// ``databaseEventObservationStrategy`` has the
+    /// ``DatabaseEventObservationStrategy/requiresDatabaseEventKind``
+    /// flag set to false.
+    func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool
     
     /// Called when the database was modified in some unspecified way.
     ///
@@ -796,8 +858,12 @@ public protocol TransactionObserver: AnyObject {
     /// Called when the database is changed by an insert, update, or
     /// delete event.
     ///
-    /// The change is pending until the current transaction ends. See
-    /// ``databaseWillCommit()-7mksu``, ``databaseDidCommit(_:)`` and
+    /// Whether this method is called or not for any given change is
+    /// controlled by ``databaseEventObservationStrategy`` and
+    /// ``observes(eventsOfKind:)``.
+    ///
+    /// The notified change is pending until the current transaction ends.
+    /// See ``databaseWillCommit()-7mksu``, ``databaseDidCommit(_:)`` and
     /// ``databaseDidRollback(_:)``.
     ///
     /// The observer has an opportunity to stop receiving further change events
@@ -861,10 +927,10 @@ public protocol TransactionObserver: AnyObject {
 
 extension TransactionObserver {
     /// The default implementation does not observe statements.
-    public var observesAllDatabaseChanges: Bool {
-        false
+    public var databaseEventObservationStrategy: DatabaseEventObservationStrategy {
+        .default
     }
-
+    
     /// The default implementation does nothing.
     public func databaseWillCommit() throws { }
     
@@ -962,16 +1028,15 @@ final class TransactionObservation {
         guard let observer else {
             return false
         }
-        return observer.observesAllDatabaseChanges || observer
-            .observes(eventsOfKind: eventKind)
+        return !observer.databaseEventObservationStrategy.requiresDatabaseEventKind || observer.observes(eventsOfKind: eventKind)
     }
     
-    func observations(for statement: Statement) -> StatementObservation? {
+    func statementObservation(for statement: Statement) -> StatementObservation? {
         guard let observer else {
             return nil
         }
         
-        if observer.observesAllDatabaseChanges {
+        if !observer.databaseEventObservationStrategy.requiresDatabaseEventKind {
             return StatementObservation(
                 transactionObservation: self,
                 trackingEvents: .all)

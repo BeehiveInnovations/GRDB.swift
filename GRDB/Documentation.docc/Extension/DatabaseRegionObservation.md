@@ -79,7 +79,7 @@ let observation = DatabaseRegionObservation(
 `DatabaseRegionObservation` will not notify impactful transactions whenever the database is modified in an undetectable way:
 
 - Changes performed by external database connections.
-- Changes performed by SQLite statements that are not compiled and executed by GRDB, including statements ran from a custom SQL function that is itself invoked with GRDB APIs.
+- Changes performed by SQLite statements that are not a `DELETE`, `INSERT` or `UPDATE` statement compiled and executed by GRDB.
 - Changes to the database schema, changes to internal system tables such as `sqlite_master`.
 - Changes to [`WITHOUT ROWID`](https://www.sqlite.org/withoutrowid.html) tables.
 
