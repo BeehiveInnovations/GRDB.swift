@@ -92,7 +92,7 @@ let package = Package(
                 "Crash",
                 "CustomSQLite",
                 "GRDBManualInstall",
-                "GRDBTests/getThreadsCount.c",
+                "GRDBTests/Core/DatabasePool/getThreadsCount.c",
                 "Info.plist",
                 "Performance",
                 "SPM",
@@ -102,9 +102,9 @@ let package = Package(
             ],
             resources: [
                 .copy("GRDBTests/Betty.jpeg"),
-                .copy("GRDBTests/InflectionsTests.json"),
-                .copy("GRDBTests/Issue1383.sqlite"),
-                .copy("GRDBTests/db.SQLCipher3"),
+                .copy("GRDBTests/Private/InflectionsTests.json"),
+                .copy("GRDBTests/ValueObservation/Issue1383.sqlite"),
+                .copy("GRDBTests/GRDBCipher/db.SQLCipher3"),
             ],
             cSettings: cSettings,
             swiftSettings: swiftSettings + [
