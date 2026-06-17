@@ -580,34 +580,36 @@ public struct DatabaseMigrator: Sendable {
     
     /// Returns unapplied migration executions
     private func unappliedExecutions(upTo targetIdentifier: String, appliedIdentifiers: Set<String>) -> [Execution] {
-        var expectedMigrations: [Migration] = []
+        var executions: [Execution] = []
+        var foundTarget = false
+        
         for (identifier, migration) in _migrations {
-            expectedMigrations.append(migration)
+            if appliedIdentifiers.contains(identifier) {
+                if !migration.mergedIdentifiers.isDisjoint(with: appliedIdentifiers) {
+                    // Migration is applied, but we have some merged identifiers to delete
+                    executions.append(Execution(migration: migration, mode: .deleteMergedIdentifiers))
+                }
+            } else {
+                // Migration is not applied yet.
+                let appliedMergedIdentifiers = migration.mergedIdentifiers.intersection(appliedIdentifiers)
+                executions.append(Execution(
+                    migration: migration,
+                    mode: .run(mergedIdentifiers: appliedMergedIdentifiers)
+                ))
+            }
+            
             if identifier == targetIdentifier {
+                foundTarget = true
                 break
             }
         }
         
         // targetIdentifier must refer to a registered migration
         GRDBPrecondition(
-            expectedMigrations.last?.identifier == targetIdentifier,
+            foundTarget,
             "undefined migration: \(String(reflecting: targetIdentifier))")
         
-        return expectedMigrations.compactMap { migration in
-            if appliedIdentifiers.contains(migration.identifier) {
-                if migration.mergedIdentifiers.isDisjoint(with: appliedIdentifiers) {
-                    // Nothing to do
-                    return nil
-                } else {
-                    // Migration is applied, but we have some merged identifiers to delete
-                    return Execution(migration: migration, mode: .deleteMergedIdentifiers)
-                }
-            } else {
-                // Migration is not applied yet.
-                let appliedMergedIdentifiers = migration.mergedIdentifiers.intersection(appliedIdentifiers)
-                return Execution(migration: migration, mode: .run(mergedIdentifiers: appliedMergedIdentifiers))
-            }
-        }
+        return executions
     }
     
     private func runMigrations(_ db: Database, upTo targetIdentifier: String) throws {
