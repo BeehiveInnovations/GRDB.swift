@@ -581,9 +581,9 @@ public struct DatabaseMigrator: Sendable {
     /// Returns unapplied migration executions
     private func unappliedExecutions(upTo targetIdentifier: String, appliedIdentifiers: Set<String>) -> [Execution] {
         var expectedMigrations: [Migration] = []
-        for (_, migration) in _migrations {
+        for (identifier, migration) in _migrations {
             expectedMigrations.append(migration)
-            if migration.identifier == targetIdentifier {
+            if identifier == targetIdentifier {
                 break
             }
         }
